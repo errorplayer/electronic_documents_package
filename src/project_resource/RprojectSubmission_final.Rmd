@@ -1,0 +1,628 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+Investigation about Factors of Loan
+========================================================
+```{r global_options,include=FALSE}
+knitr::opts_chunk$set(message = FALSE,warning = FALSE,also=FALSE)
+```
+##1 介绍
+
+####我的数据分析选择了prosper贷款数据集，它是从优达学城网上下载的。数据已经有了
+####初步的整理，在本项目里我准备就如下的问题进行简要探究：
+####1.借贷人一般都会有哪些共同情况？
+####2.平台对于每笔贷款的评级评分会有哪些影响？
+
+####首先让我们加载需要的库和工具包，还有原始数据集，并且筛减。
+```{r warning=FALSE}
+
+library(ggplot2)
+library(reshape2)
+library(plyr)
+library(dplyr)
+
+library(RColorBrewer)
+library(GGally)
+library(scales)
+library(tidyr)
+
+# Load the Data
+LD <- read.csv('prosperLoanData.csv',sep=',')
+#str(LD)
+
+
+lsample <- LD[,c("Term","BorrowerRate","LenderYield","EstimatedEffectiveYield",
+                 "ProsperRating..Alpha.","ProsperScore","IsBorrowerHomeowner",
+                 "IncomeRange","TotalProsperLoans","LoanOriginalAmount",
+                 "LoanOriginationDate","LoanOriginationQuarter",
+                 "DebtToIncomeRatio","StatedMonthlyIncome","Occupation")]
+
+lsample<-na.omit(lsample)
+
+```
+
+##2 总览数据
+
+####在开始之前我想先看看数据记录的整体情况。
+```{r warning=FALSE}
+str(lsample)
+
+```
+
+
+
+##3 可视化与观察分析
+
+###【单变量绘图】
+```{r warning=FALSE}
+summary(lsample$LoanOriginalAmount)
+ggplot(lsample,aes(x=LoanOriginalAmount,y=..count..))+
+  geom_histogram(fill="yellow",color="red",binwidth = 2000)+
+  geom_vline(xintercept = 6500,color="black",linetype=2)+
+  scale_x_continuous(breaks=c(1000,4000,6500,11000,35000))
+```
+
+####总的来说，这样的分布还是在人意料之中的，大多数借贷人并没有很高额的借款，但也
+####存在极少数相对高额的贷款。
+
+
+
+```{r warning=FALSE}
+ggplot(lsample,aes(x=IncomeRange))+
+  geom_bar(fill="white",color="blue")
+
+ggplot(lsample,aes(x=ProsperScore))+
+  geom_bar(fill="white",color="blue")
+
+ggplot(lsample,aes(x=DebtToIncomeRatio))+
+  geom_bar(fill="white",color="black")+
+  xlim(0,2)
+
+ggplot(lsample,aes(x=TotalProsperLoans))+
+  geom_bar(fill="white",color="blue")
+
+
+
+count(lsample,Occupation,sort =TRUE)
+
+ggplot(lsample,aes(x=Occupation))+
+  geom_bar(fill="white",color="blue")+
+  scale_x_discrete(breaks=c("Other","Sales - Retail","Professional",
+                            "Tradesman - Mechanic"))
+
+
+```
+
+
+####从上面的图表中获得的信息是:
+####1 贷款的用户一般都有很不错的收入。
+####2 平台的评级近似正态分布。
+####3 借款数额一般在自己声称的收入以内。
+####4 大部分平台用户是新用户，因为有过两次及以上贷款记录的用户不多。
+####5 贷款者分布在社会各个领域阶层。
+
+
+
+####现在，我将设一个新的属性，叫做平台的服务费率ServicingFee，简称服务费率。
+####它是根据借贷人支付利率减去出借人收益利率算得的。后面可能会用到这个属性。
+```{r warning=FALSE}
+lsample$ServicingFee <- lsample$BorrowerRate - lsample$LenderYield
+
+```
+
+
+####但是，我现在需要检测一下这个新变量的的异常值。
+```{r warning=FALSE}
+lsample$ServicingFee <-as.factor(lsample$ServicingFee)
+count(lsample,ServicingFee,sort=TRUE)
+```
+
+####从上面的结果来看，几乎绝大多数记录的ServicingFee为0.01或者十分接近0.01，在一
+####万多的记录里只有8个记录是0.02，这可能是由于某种误差造成的。不过没有关系，
+####下面的分析中，这个变量还是有用的。
+
+####那么是不是很多人贷款是因为想购买房子呢？
+```{r warning=FALSE}
+ggplot(lsample,aes(x=IsBorrowerHomeowner,fill=IsBorrowerHomeowner))+
+  geom_bar(color="black",stat="count")
+```
+
+
+####看看上面的图，有房子的借款人数量上和甚至比没房子的借款人多，所以刚才的猜想是
+####不准确的，买房子并不是大多数人借款的首要原因。
+
+
+####现在想要看看贷款建立的时间分布情况，但是原有的季度属性不能很好的按时间顺序绘
+####制，使得观测效果不佳。于是我用了正则表达式提取并增加了三个属性，分别是贷款
+####建立的年份、季度，以及以年份为整数部分，季度为小数部分的时间小数，使用第三个
+####属性来绘制会更加直观地体现出贷款的建立随时间的变化趋势。
+```{r warning=FALSE}
+word <- lsample$LoanOriginationQuarter
+pattern <- c('Q[0-9] [0-9_.%]')
+gregout <- gregexpr(pattern,word)
+lsample$quarter_of_year <- as.numeric(substr(word,gregout[[1]]+1,
+                                             gregout[[1]]+
+                                               attr(gregout[[1]],
+                                                    'match.length')-3))
+lsample$year <- as.numeric(substr(word,gregout[[1]]+3,
+                                  gregout[[1]]+attr(gregout[[1]],
+                                                    'match.length')+2))
+lsample$year_quarter <- lsample$quarter_of_year*0.1+lsample$year
+
+count(lsample,year_quarter,sort =TRUE)
+
+lsample$year_quarter <- as.character(lsample$year_quarter)
+
+ggplot(lsample,aes(x=year_quarter))+
+  geom_bar()+
+  theme(axis.text.x=element_text(angle=45,colour="black",size=10))+
+  xlab("Year.Quarter")
+
+lsample$year <- as.character(substr(word,gregout[[1]]+3,gregout[[1]]+
+                                      attr(gregout[[1]],'match.length')+2))
+ggplot(lsample,aes(x=year))+
+  geom_bar()+
+  xlab("Year")
+```
+
+####从上图可以看出季度对于贷款的影响并没有特别明显的规律,2013年第四季度和2014年
+####第一季度的数据出现了异常值。可能的推测是该时间附近出现了经济事件。
+
+####现在来看看平台给出的Alpha等级在数量上有没有任何偏向？
+```{r warning=FALSE}
+lsample$ProsperRating..Alpha.<-factor(lsample$ProsperRating..Alpha.,
+                                      levels=c("AA","A","B","C","D","E","HR",""))
+ggplot(lsample,aes(x=ProsperRating..Alpha.,fill=ProsperRating..Alpha.))+
+  geom_bar(color="white",stat="count")
+```
+
+####说实话，如果A等级的数量能够再少一点那么我准备说它近似一个正态分布，但是这个
+####数据之所以存在肯定是有它各方面原因的，不能说是一个粗大误差。作为单变量分析的
+####最后一个图，显然它看上去也比前面的图更加漂亮，这也预告了接下来我的分析主要着
+####力于它。
+
+###【单变量分析 总结】
+
+###本分析的数据集结构如何？
+####我将原始数据集LD进行了筛减，保留16个变量（后面可能增加了一些）并载入到项目
+####分析主要用到的数据框架lsample里。然后我还在一开始先去除了很多含NA值的记录，
+####剩余17724个观察对象。
+
+####值得注意的定序变量是：
+####(best)—————-> (worst) 
+####ProsperRating..Alpha.:AA A B C D E HR
+
+
+###对于这个数据集，主要感兴趣的地方是什么？
+####对于这个数据集，原始有80多个变量，我比较感兴趣的是一些个用户个体有关的特征，
+####比如Occupation,StatedMonthlyIncome,IsBorrowerHomeowner等，通过对它们的探索分
+####析，我们不仅可以获得与贷款相关的信息，甚至可能在这些群体的信息里发现一些社会
+####的共性等。
+
+
+###你认为的数据集的其他什么特征可能帮助你的分析？
+####当然，本项目的主要目的是分析有关贷款的一些问题，那么除了贷款人的个人信息以
+####外，我们还需要一些着力于贷款这个事物上的相关信息，比如LoanOriginalAmount,
+####LoanOriginationDate,LenderYield,BorrowerRate这些，只有结合上这些数据，
+####才能最终达到本次分析的目的。
+
+###你是否基于原有的变量创建了新的变量？
+####基于原来数据集里的LoanOriginationQuarter变量，我使用正则表达式截取出年份和季
+####度，分别创建了year和quarter，并且以小数的形式，即year.quarter的形式将两个变
+####量融合在一起，创建了变量year_quarter。这个变量看是去很具有自然可读性，并将其
+####设为了character类型，计算机也能正确的根据大小排序，这样极大的方便了我的使用，
+####能更好的服务于我的绘图。
+
+
+
+###【双变量绘图】
+
+
+####新建一个数据框架Proscore_df，它以平台的Alpha等级为分类，计算每个分类所有平台
+####评分，并求均值。
+```{r warning=FALSE}
+lsample$ProsperRating..Alpha.<-factor(lsample$ProsperRating..Alpha.,
+                                      levels=c("AA","A","B","C","D","E","HR",""))
+
+Proscore_df <- lsample %>%
+  filter(lsample$ProsperRating..Alpha. !="") %>%
+  group_by(ProsperRating..Alpha.) %>%
+  summarise(
+    ps_mean = mean(ProsperScore),
+    Num = n()
+  )%>%
+  ungroup()%>%
+  arrange(ProsperRating..Alpha.)
+
+ggplot(data=Proscore_df,aes(ProsperRating..Alpha.,ps_mean))+
+  geom_point()
+
+```
+
+####从上图以Alpha等级为横坐标，评分均值为纵坐标，可以知道，该平台给出的Alpha等级
+####和评分一般会有很大的相关性。
+
+####再来运用箱线图做一个分析。
+```{r warning=FALSE}
+
+
+lsample$ProsperRating..Alpha.<-factor(lsample$ProsperRating..Alpha.,
+                                      levels=c("AA","A","B","C","D","E","HR",""))
+
+
+ggplot(data = lsample, aes(x = ProsperRating..Alpha., y = ProsperScore)) +
+geom_boxplot()
+
+
+```
+
+
+####从上面的箱线图来看，AA,A存在较多的异常值，在总体上从等级AA到等级E都是遵从比
+####较好的相互关系，等级E和等级HR的区别并不明显，可能是平台在设置这两个等级时，
+####有别的考虑，并非只是与评分挂钩。
+
+####那么评级对出借人收益和借款人费率有没有影响呢？
+```{r warning=FALSE}
+
+lsample$ProsperRating..Alpha.<-factor(lsample$ProsperRating..Alpha.,
+                                      levels=c("AA","A","B","C","D","E","HR",""))
+
+
+ggplot(lsample,aes(ProsperRating..Alpha.,LenderYield))+
+  geom_point(alpha = 0.08)
+
+ggplot(lsample,aes(lsample$ProsperRating..Alpha.,BorrowerRate))+
+  geom_point(alpha = 0.08)
+  
+```
+
+####显然，上面的绘图呈现了：评级越高，也就是风险越低，出借人获得的收益越低。而对
+####于贷款者，平台认为其风险越小，相应的其支付的费率也会变低。这样的结论显然符合
+####市场规律。
+
+####下面这个数据框架ServRate_date则以贷款发生时间分类，计算借款人的支付利率的均
+####值。为保证样本容量，我需要恢复含NA值的数据记录。
+```{r warning=FALSE}
+lsample <- LD[,c("Term","BorrowerRate","LenderYield","EstimatedEffectiveYield",
+                 "ProsperRating..Alpha.","ProsperScore","IsBorrowerHomeowner",
+                 "IncomeRange","TotalProsperLoans","LoanOriginalAmount",
+                 "LoanOriginationDate","LoanOriginationQuarter",
+                 "DebtToIncomeRatio","StatedMonthlyIncome","Occupation")]
+lsample$ServicingFee <- lsample$BorrowerRate - lsample$LenderYield
+
+
+ServRate_date <-lsample %>%
+  group_by(LoanOriginationDate) %>%
+  summarise(
+    rate_mean = mean(ServicingFee),
+    Num = n()
+  )%>%
+  ungroup()%>%
+  arrange(LoanOriginationDate)
+
+
+
+
+lsample<-na.omit(lsample)
+
+
+ggplot(ServRate_date, aes(LoanOriginationDate, rate_mean, colour=rate_mean)) + 
+  geom_point(alpha=0.2) +
+  scale_colour_gradientn(colours=rainbow(4))
+  
+```
+
+####对于这个图的分析，在最终成图环节我会介绍。
+
+
+####借贷人在贷款时表明自己的收入与实际贷款数额之间有没有什么关系呢？
+
+```{r warning=FALSE}
+ggplot(lsample,aes(x=StatedMonthlyIncome,y=DebtToIncomeRatio))+
+  xlim(0,90000) +
+  geom_point(alpha = 0.05)
+
+ggplot(lsample,aes(x=StatedMonthlyIncome,y=DebtToIncomeRatio))+
+  geom_boxplot(alpha = 0.05)+
+  ylim(0,5)
+   
+  
+  
+```
+
+####散点图中数据点主要堆在靠近坐标原点的地方，这也不难理解，大多数人声称的月收入
+####在30000以内，并且所贷款额也差不多在自己能力范围之内，极少有贷款数额过高的。
+####箱线图中，异常值较多，遍布范围广，通过alpha 模糊化，可以看到整体还是趋于大部
+####分的，从另一个角度反映了散点图的信息。
+
+
+####下面这幅图有关出借人的预期收益和实际收益。
+```{r warning=FALSE}
+lsample$LenderYield <- as.numeric(lsample$LenderYield )
+lsample$EstimatedEffectiveYield <- as.numeric(lsample$EstimatedEffectiveYield )
+
+
+if(lsample$LenderYield !="" && lsample$EstimatedEffectiveYield !=""  ) 
+  lsample$EstmaterError <- lsample$LenderYield -
+  lsample$EstimatedEffectiveYield  else lsample$EstmaterError <- 0
+cor.test(lsample$LenderYield, lsample$EstimatedEffectiveYield,
+         method = c("pearson"),conf.level = 0.95)
+ggplot(lsample,aes(x=EstimatedEffectiveYield))+
+  geom_bar(fill="white",color="blue")
+```
+
+####置信区间在95%的情况下，出借人的实际收益和预期相关系数为0.7925556，实际收益普
+####遍较预期低。
+
+
+####Term VS ProsperRating..Alpha.
+```{r warning=FALSE}
+ggplot(lsample,aes(as.factor(Term),ProsperRating..Alpha.))+
+  geom_point(alpha = 0.04)
+
+```
+
+####即使我使用了alpha对数据进行了模糊，但是同一列（相同贷款期限）的点的清晰度都
+####差不多，如此看来，贷款期限对于Alpha等级好像没什么影响。
+
+###【双变量分析】
+
+###说说你从这部分的探究中观察到了什么关系？
+####1.平台的评分和评级会有一定的关系。一般来说评级越好评分相应的越高。
+####2.评级好的贷款意味着风险可能小些，因此出借人收益与借款人的费率相应变低。
+####3.我觉得平台收取的费率随时间变化时有一定的原因的，这可能反映出平台的发展问题，
+####市场的变化等等，包含众多复杂因素。
+####4.人们在贷款时，大多数会量力而为，一般不会做出风险过高的事，所以大部分人选择
+####了自己能力范围之内的贷款。
+####5.贷款平台给出的预期收益普遍比出借人实际收益低一些。
+####6.很难单单从贷款期限的角度直接评价一次贷款的等级或者风险。
+
+
+###【多变量绘图】
+
+####下面这个三变量的图包含贷期、平台Alpha等级和出借人收益利率。
+```{r warning=FALSE}
+lsample$ProsperRating..Alpha.<-factor(lsample$ProsperRating..Alpha.,
+                                      levels=c("AA","A","B","C","D","E","HR",""))
+ggplot(lsample[which(lsample$ProsperRating..Alpha. != ""),],
+       aes(x = LenderYield,y = as.factor(Term), color =ProsperRating..Alpha. ) )+ 
+  geom_point(alpha = 0.7, size = 1) +
+  scale_color_brewer(type = 'div',
+                     palette = "Blues",
+                     guide = guide_legend(title = 'Rank', 
+                                          reverse = F,
+                                          override.aes = list(alpha = 1, size = 2))) 
+  
+```
+
+
+
+
+
+####下面这幅图可以看出不同评级的贷款里，贷款数额的密度分布是差不多的，故可知贷款
+####数额与这个平台给出的评级没有多大关系。
+```{r warning=FALSE}
+lsample$ProsperRating..Alpha.<-factor(lsample$ProsperRating..Alpha.,
+                                      levels=c("AA","A","B","C","D","E","HR",""))
+ qplot(lsample$LoanOriginalAmount,data=lsample,geom=c("density"),  
+      facets=lsample$ProsperRating..Alpha.~.,fill=lsample$ProsperRating..Alpha.) 
+
+```
+
+
+
+
+
+
+
+
+
+####我们来看看贷款人的职业、收入和评级分布。
+```{r warning=FALSE}
+
+
+Occup_Income <-lsample %>%
+  group_by(Occupation) %>%
+  summarise(
+    income_mean= mean(StatedMonthlyIncome),
+    score_mean = mean(ProsperScore),
+    Num = n()
+  )%>%
+  ungroup()%>%
+  arrange(Occupation)
+
+Occup_Income$Rank = floor(Occup_Income$score_mean)
+
+
+head( arrange(Occup_Income, desc(income_mean)))
+head( arrange(Occup_Income, (income_mean)),10)
+head( arrange(Occup_Income, desc(Rank)),10)
+
+Occup_Income$Rank <-as.factor(Occup_Income$Rank)
+
+ggplot(Occup_Income,aes(income_mean,Rank))+
+  geom_point()
+
+
+ggplot(Occup_Income,aes(Occupation,Rank))+
+  geom_point()+
+  theme(axis.text.x=element_text(angle=45,colour="black",size=10))+
+  scale_x_discrete(breaks = c("Other","Judge","Architect","Homemaker","Judge",
+                              "Student - College Freshman",
+                              "Student - College Senior","Accountant/CPA"))
+
+
+
+  
+ggplot(Occup_Income,aes(Occupation,income_mean,color = Rank))+
+  geom_point()+
+  theme(axis.text.x=element_text(angle=90,colour="black",size=7))+
+  scale_x_discrete(breaks = c("Investor","Doctor","Dentist","Attorney","Judge",
+                              "Executive","Student - College Junior",
+                              "Student - College Senior",
+                              "Student - Community College","Waiter/Waitress"))+
+  scale_color_brewer(type = 'qual',
+                     palette = "Blues") 
+
+
+
+
+```
+
+
+####这里我又新建了一个数据框架Occup_Income,里面包含不同职业平均收入以及评分均值
+####的向下取整从5(评分最低)到8(评分最高)。可以观察到，收入和贷款评分关系不大，
+####但是有趣的现象就是如果你的收入在10000以下，那么你的评分有很高几率在5到6分。
+####此外，我们也很难从职业的角度下结论说哪个职业就更偏向于获得较高的评分。
+
+###【多变量分析】
+
+####在这一部分里我们主要围绕平台给出的Alpha等级绘制了一些相关的图。首先是再一次
+####印证了贷期不是特别能影响平台的等级评定。这个等级会很大地影响费率问题，主要体
+####现在贷款双方的支出与收益。我们甚至还能看到贷期为三年的贷款数量较多，贷期为一
+####年的相对少一些。
+####在贷款人的职业、收入和评级分布里，我们了解到各行各业的贷款者都是存在的。比较
+####符合我的预期的现象是，学生的收入一般较低，一些拥有专业技能的领域人员收入普遍
+####高，然后投资人由于资金充足，可以调配市场资源，故收入很高这也容易理解。
+
+------
+
+## Final Plots and Summary
+
+### Plot One
+```{r warning=FALSE}
+lsample$ProsperRating..Alpha.<-factor(lsample$ProsperRating..Alpha.,
+                                      levels=c("AA","A","B","C","D","E","HR",""))
+ggplot(lsample[which(lsample$ProsperRating..Alpha. != ""),],
+       aes(x = LenderYield, y = as.factor(Term), color =ProsperRating..Alpha. ) )+ 
+  geom_point(alpha = 0.7, size = 1) +
+  scale_color_brewer(type = 'div', 
+                     palette = "Blues",
+                     guide = guide_legend(title = 'Rank', 
+                                          reverse = F,
+                                          override.aes = list(alpha = 1, size = 2))) +
+  ylab("Loan Term")+
+  xlab("Lender actual Yield")
+  
+
+```
+
+#### 首先很容易看出的是，不管那个贷期，普遍的现象是评级越高，收益利率越低。其实
+####这也不难理解，因为我们从上面评分的数量分布情况就可以知道，评分过低和过高的
+####贷款事件数量都远小于评分一般的贷款，也就是说大多数贷款的安全风险一般，而风险
+####低的（评级高的）贷款自然应该有较低的收益利率，而愿意接受高风险才会有高收入。
+####这就好比把钱存银行、买国债或者拿去炒股。对于评级较高的贷款，仔细观察的话可以
+####发现，贷期越久，借贷人收益利率愈高，而评级低的贷款，由于风险多，不可控因素
+####复杂，这个现象就不怎么明显了。
+
+
+### Plot Two
+```{r warning=FALSE}
+lsample <- LD[,c("Term","BorrowerRate","LenderYield","EstimatedEffectiveYield",
+                 "ProsperRating..Alpha.","ProsperScore","IsBorrowerHomeowner",
+                 "IncomeRange","TotalProsperLoans","LoanOriginalAmount",
+                 "LoanOriginationDate","LoanOriginationQuarter",
+                 "DebtToIncomeRatio","StatedMonthlyIncome","Occupation")]
+lsample$ServicingFee <- lsample$BorrowerRate - lsample$LenderYield
+
+
+ServRate_date <-lsample %>%
+  group_by(LoanOriginationDate) %>%
+  summarise(
+    rate_mean = mean(ServicingFee),
+    Num = n()
+  )%>%
+  ungroup()%>%
+  arrange(LoanOriginationDate)
+
+
+lsample<-na.omit(lsample)
+
+
+ggplot(ServRate_date[which(ServRate_date$rate_mean<0.02),], 
+       aes(LoanOriginationDate, rate_mean,colour=rate_mean)) + 
+  geom_point(alpha=0.2) + 
+  scale_colour_gradientn(colours=rainbow(8))+
+  ylab("the mean of Service Fee ")+
+  xlab("Loan Date")
+```
+
+####可见，随着时间的推移，平台收取的服务费率趋于稳定，而一开始波动很大。这让我仿
+####佛看到了一个贷款机构的发展历程，刚刚起步时,收市场影响大，因此费率波动很大，后面
+####不断发展，调整费率，壮大稳定后就有足够的实力稳定营收。
+
+
+
+
+
+### Plot Three
+```{r warning=FALSE}
+ggplot(Occup_Income,aes(x=Occupation,y=income_mean,color = Rank))+
+  geom_point()+
+  theme(axis.text.x=element_text(angle=90,colour="black",size=7))+
+  scale_x_discrete(breaks = c("Investor","Doctor","Dentist","Attorney","Judge",
+                              "Executive","Student - College Junior",
+                              "Student - College Senior",
+                              "Student - Community College","Waiter/Waitress"))
+  
+
+```
+
+####这幅图再一次印证了刚才我说的--显然大部分5分和6分的点都是在收入12000以内的，从
+####颜色上很容易分辨出来。再者，我通过前面的简单排序，将几个收入靠前和靠后的职业
+####标注出来，医生、牙医、投资人和律师、代理人等都是高收入群体，大学学生和服务人
+####员普遍收入偏低，间接反映了这个一个重视专业技能的社会。
+
+
+------
+
+##4 Reflection
+####通过这个项目，我重新复习和巩固了之前所学的关于R语言和数据分析的知识。每次我
+####遇到困难，首先会自己在网上搜索解决方案或者查看优达学城推荐的相关网站，最后会
+####向mentor提问或者在论坛发帖求助，mentor和群里同学的回答让我学到了很多平时自己
+####没有注意到的细节。我选的这个数据集挺大的，不仅数据记录很多，而且属性也有80多
+####个，我只得对着属性说明文档一个一个看，但是一开始很茫然，不知道自己要探索什么，
+####所以就昏头昏脑的选了十几个属性加载到项目数据框架lsample里，但是该怎么做还是
+####很迷茫。于是，想着先从简单的单变量绘图开始，就这样，我堆列了几张简单的图，
+####慢慢的开始感觉到一些探索的思路，虽然不是很清晰，但是比之前好很多。后面慢慢的
+####发现双变量和三变量的图确实隐藏着一些生活上的逻辑或者一些与自己原来认识有冲突
+####的现象，便试着去理解它。
+ 
+####我面临的最大的问题是一开始拿到数据时不知道从何下手，也就是不知道应该探索什么
+####问题，导致我的分析缺乏思路的引导。另外，我觉得分析这项工作很容易受分析人员主
+####观所影响，比如在工作中面对一份数据，不同分析者对每个属性的理解可能不一样，这
+####样会导致分析过程多样化，结果自然会有差异，那么这个问题的出现，对于评价一项数
+####据分析工作的质量会有怎么样的影响呢。
+
+####在我的分析里大多数时候都时使用去除NA值的记录的，这样可以很大程度上减少计算机
+####绘图的时间，而且很多代码写起来不容易有报错。这些是好处，但是直接导致了样本数
+####量大幅减少。可以注意到，我在Plot Two 里，又恢复了那些某些属性为NA值的数据，
+####这是因为我觉得Plot Two 的这个分析，对样本容量要求较高，如果样本太少对于那个
+####问题来说，我的结论就会很无力，甚至看不到那样的结果，所以我需要重新设置数据，
+####绘图之后再变回去。
+
+####我的一点收获就是在遇到不利于分析的数据情况时能够想办法去解决。就比如
+####Year.Quarter这个属性，原始数据集中关于季度的属性LoanOriginationQuarter在绘图
+####的时候并不是按照年份先排列然后到季度的，这样就使得图表非常不直观，于是着手
+####解决。当时自己通过网上找的正则表达式然后一步一步弄出一个新的属性，虽然在数据
+####分析师实际的工作中这个显得微不足道，但是毕竟这个小细节也是经过了自己的思考和
+####着手解决，也是尝到了亲历亲为的乐趣，“遇到困境不要逃避而是积极寻找办法去解决它”
+####这样处事哲理第一次被运用到了R语言和数据分析的学习中。
+
+####实际工作中，我觉得可以通过如下方式使分析更丰富：
+####  1.使用多种分析或者可视化工具，比如R语言是一种很强大的分析和可视化工具，可
+####能还有别的我不知道的工具也可以被运用到数据分析中来，而不仅仅只是R语言。
+####  2.多与产生数据的实体沟通或者分析人员亲身接触、观察。比如网络的数据大多来源
+####于用户，那么分析人员可以直接和这些实体有一个深入的沟通我觉得对数据的分析，不
+####论是从真实性、多样性或者其他都会大有脾益。
+
+####对于这个数据，我发现其中很多记录某些项属性是NA值或者是other这样的大类，显然
+####会降低数据的利用率，所以希望在数据采集过程中改善一下，获得更多全面的信息。
+
+####另外，我认为分析需要有一个时间上的修正或者说调整改善。怎么个意思呢，就是，这
+####些数据相对于今天已经是几年前的信息了，如果拿最近几年的数据来分析，可能会得出
+####不一样的结论，当然也有可能一些结论不会改变。通过分析不同时间段的数据，我们可
+####以深入或者说更加细致地探寻到数据里的“定律”，以及那些随时间、外界变化而变化的
+####动态规律，这样可以提高分析的思维，增加经验，也能获得更加优质的分析结果和结论。
